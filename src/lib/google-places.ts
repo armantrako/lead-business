@@ -1,40 +1,6 @@
 import { BusinessType, Destination, SearchAudit, VerifiedLead } from '@/types';
 import { verifyNoOfficialWebsite } from './verifier';
 
-interface RawPlaceSummary {
-  place_id: string;
-  name: string;
-  geometry?: {
-    location?: {
-      lat: number;
-      lng: number;
-    };
-  };
-  business_status?: string;
-  rating?: number;
-  user_ratings_total?: number;
-  vicinity?: string;
-}
-
-interface PlaceDetailsResult {
-  place_id: string;
-  name: string;
-  formatted_phone_number?: string;
-  international_phone_number?: string;
-  website?: string;
-  rating?: number;
-  user_ratings_total?: number;
-  url?: string;
-  formatted_address?: string;
-  business_status?: string;
-  geometry?: {
-    location?: {
-      lat: number;
-      lng: number;
-    };
-  };
-}
-
 export class GooglePlacesError extends Error {
   code: 'MISSING_API_KEY' | 'QUOTA_EXCEEDED' | 'INVALID_KEY' | 'API_ERROR';
   constructor(message: string, code: 'MISSING_API_KEY' | 'QUOTA_EXCEEDED' | 'INVALID_KEY' | 'API_ERROR') {
@@ -72,6 +38,116 @@ function normalizePhone(phone: string): string {
   return phone.replace(/[^\d+]/g, '');
 }
 
+interface NewPlaceItem {
+  id: string;
+  displayName?: { text: string; languageCode?: string };
+  formattedAddress?: string;
+  nationalPhoneNumber?: string;
+  internationalPhoneNumber?: string;
+  rating?: number;
+  userRatingCount?: number;
+  websiteUri?: string;
+  googleMapsUri?: string;
+  location?: { latitude: number; longitude: number };
+  businessStatus?: string;
+}
+
+/**
+ * Searches places using Google Places API (New) v1.
+ */
+async function searchPlacesNew(
+  destination: Destination,
+  businessType: BusinessType,
+  apiKey: string
+): Promise<NewPlaceItem[]> {
+  const typeQuery = businessType === 'hotels' ? 'hotels in' : 'restaurants in';
+  const query = `${typeQuery} ${destination.name}, ${destination.country}`;
+
+  const url = 'https://places.googleapis.com/v1/places:searchText';
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask':
+        'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.location,places.businessStatus',
+    },
+    body: JSON.stringify({
+      textQuery: query,
+      maxResultCount: 20,
+      locationBias: {
+        circle: {
+          center: { latitude: destination.lat, longitude: destination.lng },
+          radius: destination.radiusMeters,
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData.error?.message || `HTTP ${response.status}`;
+    if (response.status === 403) {
+      throw new GooglePlacesError(
+        `Google Places API request denied: ${message}. Check your API key.`,
+        'INVALID_KEY'
+      );
+    }
+    if (response.status === 429) {
+      throw new GooglePlacesError(
+        'Google Places API quota exceeded or rate limit reached.',
+        'QUOTA_EXCEEDED'
+      );
+    }
+    throw new GooglePlacesError(`Google Places API error: ${message}`, 'API_ERROR');
+  }
+
+  const data = await response.json();
+  const places: NewPlaceItem[] = data.places || [];
+
+  // Also query searchNearby for higher density if available
+  try {
+    const nearbyUrl = 'https://places.googleapis.com/v1/places:searchNearby';
+    const nearbyType = businessType === 'hotels' ? ['lodging'] : ['restaurant'];
+    const nearbyRes = await fetch(nearbyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask':
+          'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,places.googleMapsUri,places.location,places.businessStatus',
+      },
+      body: JSON.stringify({
+        includedTypes: nearbyType,
+        maxResultCount: 20,
+        locationRestriction: {
+          circle: {
+            center: { latitude: destination.lat, longitude: destination.lng },
+            radius: destination.radiusMeters,
+          },
+        },
+      }),
+    });
+
+    if (nearbyRes.ok) {
+      const nearbyData = await nearbyRes.json();
+      const nearbyPlaces: NewPlaceItem[] = nearbyData.places || [];
+      // Merge unique by place id
+      const existingIds = new Set(places.map((p) => p.id));
+      for (const p of nearbyPlaces) {
+        if (!existingIds.has(p.id)) {
+          places.push(p);
+          existingIds.add(p.id);
+        }
+      }
+    }
+  } catch {
+    // If nearby secondary query fails, proceed with searchText results
+  }
+
+  return places;
+}
+
 /**
  * Searches for real businesses using Google Places API and performs strict website verification.
  */
@@ -87,7 +163,7 @@ export async function searchAndVerifyLeads(
 
   if (!apiKey || apiKey.trim() === '') {
     throw new GooglePlacesError(
-      'Google Places API key is not configured. Please add GOOGLE_PLACES_API_KEY to your .env.local file.',
+      'Google Places API key is not configured. Please set GOOGLE_PLACES_API_KEY.',
       'MISSING_API_KEY'
     );
   }
@@ -101,97 +177,45 @@ export async function searchAndVerifyLeads(
     verifiedCount: 0,
   };
 
-  // Google Places Place Type
-  const googleType = businessType === 'hotels' ? 'lodging' : 'restaurant';
-  const keyword = businessType === 'hotels' ? 'hotel OR resort OR pansion' : 'restaurant OR gostionica OR konoba';
+  const rawPlaces = await searchPlacesNew(destination, businessType, apiKey);
+  audit.totalScanned = rawPlaces.length;
 
-  // 1. Fetch nearby places restricted to destination coordinates and radius
-  const nearbyUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${destination.lat},${destination.lng}&radius=${destination.radiusMeters}&type=${googleType}&keyword=${encodeURIComponent(keyword)}&key=${apiKey}`;
-
-  const nearbyResponse = await fetch(nearbyUrl);
-  if (!nearbyResponse.ok) {
-    throw new GooglePlacesError(
-      `Google Places API request failed with status ${nearbyResponse.status}`,
-      'API_ERROR'
-    );
-  }
-
-  const nearbyData = await nearbyResponse.json();
-
-  if (nearbyData.status === 'OVER_QUERY_LIMIT' || nearbyData.status === 'RESOURCE_EXHAUSTED') {
-    throw new GooglePlacesError(
-      'Google Places API quota exceeded or query limit reached. Please check your Google Cloud quota and billing.',
-      'QUOTA_EXCEEDED'
-    );
-  }
-
-  if (nearbyData.status === 'REQUEST_DENIED') {
-    throw new GooglePlacesError(
-      `Google Places request denied: ${nearbyData.error_message || 'Please check your API key and permissions.'}`,
-      'INVALID_KEY'
-    );
-  }
-
-  const rawResults: RawPlaceSummary[] = nearbyData.results || [];
-  audit.totalScanned = rawResults.length;
-
-  if (rawResults.length === 0) {
+  if (rawPlaces.length === 0) {
     return { leads: [], audit };
   }
 
-  // Deduplication maps
   const seenPlaceIds = new Set<string>();
   const seenPhones = new Set<string>();
   const candidateLeads: VerifiedLead[] = [];
 
-  // Limit processing batch to control latency while finding up to 30 leads
-  const placesToInspect = rawResults.slice(0, 40);
-
-  for (const item of placesToInspect) {
-    if (!item.place_id || seenPlaceIds.has(item.place_id)) {
+  for (const place of rawPlaces) {
+    if (!place.id || seenPlaceIds.has(place.id)) {
       continue;
     }
-    seenPlaceIds.add(item.place_id);
+    seenPlaceIds.add(place.id);
 
-    // Business Status check: Skip closed permanently/temporarily
-    if (item.business_status && item.business_status !== 'OPERATIONAL') {
+    // Business Status check: Skip closed permanently or temporarily
+    if (place.businessStatus && place.businessStatus !== 'OPERATIONAL') {
       continue;
     }
 
     // Geographic verification: Ensure result is actually within destination area
-    if (item.geometry?.location) {
+    if (place.location) {
       const distance = calculateDistanceMeters(
         destination.lat,
         destination.lng,
-        item.geometry.location.lat,
-        item.geometry.location.lng
+        place.location.latitude,
+        place.location.longitude
       );
-      // Strict rule: Discard businesses outside of 1.6x destination radius
+      // Discard businesses outside of 1.6x destination radius
       if (distance > destination.radiusMeters * 1.6) {
         audit.excludedDistant++;
         continue;
       }
     }
 
-    // 2. Fetch Place Details for exact phone, website, and maps link
-    const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${item.place_id}&fields=name,formatted_phone_number,international_phone_number,website,rating,user_ratings_total,url,formatted_address,business_status,geometry&key=${apiKey}`;
-
-    let details: PlaceDetailsResult | null = null;
-    try {
-      const detailRes = await fetch(detailsUrl);
-      const detailData = await detailRes.json();
-      if (detailData.status === 'OK' && detailData.result) {
-        details = detailData.result;
-      }
-    } catch {
-      continue;
-    }
-
-    if (!details) continue;
-
-    // Check phone number: "If there is no valid phone number -> exclude the business."
-    const phone =
-      details.international_phone_number || details.formatted_phone_number;
+    // Phone validation: "If there is no valid phone number -> exclude the business."
+    const phone = place.internationalPhoneNumber || place.nationalPhoneNumber;
     if (!phone || phone.trim().length < 6) {
       audit.excludedNoPhone++;
       continue;
@@ -204,18 +228,20 @@ export async function searchAndVerifyLeads(
     }
     seenPhones.add(normalizedPhone);
 
-    // Check Google Places website: "If a website exists -> EXCLUDE."
-    if (details.website && details.website.trim().length > 0) {
+    // Website check: "If a website exists -> EXCLUDE."
+    if (place.websiteUri && place.websiteUri.trim().length > 0) {
       audit.excludedWithExistingWebsite++;
       continue;
     }
 
+    const businessName = place.displayName?.text || 'Business';
+
     // Step 3: Perform rigorous secondary search verification
     const verification = await verifyNoOfficialWebsite(
-      details.name,
+      businessName,
       destination.name,
       destination.country,
-      details.website
+      place.websiteUri
     );
 
     if (!verification.isVerifiedNoWebsite || verification.confidence !== 'HIGH') {
@@ -225,18 +251,18 @@ export async function searchAndVerifyLeads(
 
     // Valid verified lead found!
     const verifiedLead: VerifiedLead = {
-      placeId: details.place_id || item.place_id,
-      name: details.name,
+      placeId: place.id,
+      name: businessName,
       phoneNumber: phone,
       destination: destination.name,
       destinationId: destination.id,
       country: destination.country,
-      rating: details.rating ?? item.rating ?? 0,
-      userRatingsTotal: details.user_ratings_total ?? item.user_ratings_total ?? 0,
+      rating: place.rating ?? 0,
+      userRatingsTotal: place.userRatingCount ?? 0,
       googleMapsUrl:
-        details.url ||
-        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(details.name)}&query_place_id=${item.place_id}`,
-      address: details.formatted_address || item.vicinity || destination.name,
+        place.googleMapsUri ||
+        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(businessName)}&query_place_id=${place.id}`,
+      address: place.formattedAddress || destination.name,
       verificationStatus: 'VERIFIED NO OFFICIAL WEBSITE',
       verificationTimestamp: new Date().toISOString(),
     };
