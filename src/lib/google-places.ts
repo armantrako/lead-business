@@ -132,7 +132,6 @@ async function searchPlacesNew(
     if (nearbyRes.ok) {
       const nearbyData = await nearbyRes.json();
       const nearbyPlaces: NewPlaceItem[] = nearbyData.places || [];
-      // Merge unique by place id
       const existingIds = new Set(places.map((p) => p.id));
       for (const p of nearbyPlaces) {
         if (!existingIds.has(p.id)) {
@@ -142,7 +141,7 @@ async function searchPlacesNew(
       }
     }
   } catch {
-    // If nearby secondary query fails, proceed with searchText results
+    // Proceed with searchText results
   }
 
   return places;
@@ -235,6 +234,9 @@ export async function searchAndVerifyLeads(
     }
 
     const businessName = place.displayName?.text || 'Business';
+
+    // Polite pacing delay (250ms) to ensure external search providers don't throttle or reset connections
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
     // Step 3: Perform rigorous secondary search verification
     const verification = await verifyNoOfficialWebsite(

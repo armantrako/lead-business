@@ -16,11 +16,8 @@
 const DIRECTORY_AND_OTA_DOMAINS = [
   // OTAs & Booking engines
   'booking.com',
-  'tripadvisor.com',
   'tripadvisor.',
-  'airbnb.com',
   'airbnb.',
-  'expedia.com',
   'expedia.',
   'hotels.com',
   'agoda.com',
@@ -60,7 +57,6 @@ const DIRECTORY_AND_OTA_DOMAINS = [
   'tableonline.',
   'menue.at',
   'speisekarte.de',
-  'falstaff.com',
   'falstaff.',
   'gaultmillau.',
   'michelin.com',
@@ -210,112 +206,145 @@ export async function verifyNoOfficialWebsite(
   }
 
   // Step 2: Perform additional search verification
-  // Search query: "${businessName}" "${destinationName}"
-  const query = `"${businessName}" ${destinationName} ${countryName}`;
+  const query = `${businessName} ${destinationName} ${countryName}`;
   const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
 
     const response = await fetch(searchUrl, {
       signal: controller.signal,
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
         'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.7',
+        'Referer': 'https://html.duckduckgo.com/',
       },
     });
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      // If search service is temporarily throttled or erroring, do NOT guess.
-      // Strict rule: "If verification is uncertain -> EXCLUDE."
-      return {
-        isVerifiedNoWebsite: false,
-        reason: `Search verification unavailable (HTTP ${response.status}). Excluded for accuracy.`,
-        confidence: 'UNCERTAIN',
-      };
+      // In case DDG html is temporarily throttled, try DDG lite endpoint as fallback
+      const liteRes = await fetch('https://lite.duckduckgo.com/lite/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+          'Referer': 'https://lite.duckduckgo.com/',
+        },
+        body: 'q=' + encodeURIComponent(query),
+      });
+
+      if (!liteRes.ok) {
+        return {
+          isVerifiedNoWebsite: false,
+          reason: `Search verification unavailable (HTTP ${response.status}). Excluded for accuracy.`,
+          confidence: 'UNCERTAIN',
+        };
+      }
+
+      const liteHtml = await liteRes.text();
+      const liteMatches = [...liteHtml.matchAll(/class=['"]result-link['"][^>]*href=['"]([^'"]+)['"]/g)];
+      const urls = [...new Set(liteMatches.map((m) => m[1]))];
+      return analyzeFoundUrls(urls, businessName);
     }
 
     const html = await response.text();
-
-    // Extract links from DuckDuckGo HTML results (uddg parameter contains actual target URLs)
     const matches = [...html.matchAll(/uddg=([^&"'>\s]+)/g)];
     const urls = [...new Set(matches.map((m) => decodeURIComponent(m[1])))];
 
-    const normalizedBusiness = normalizeName(businessName);
+    return analyzeFoundUrls(urls, businessName);
+  } catch (err: unknown) {
+    // If external search network drops, fallback to lite or safe exclusion
+    try {
+      const liteRes = await fetch('https://lite.duckduckgo.com/lite/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+          'Referer': 'https://lite.duckduckgo.com/',
+        },
+        body: 'q=' + encodeURIComponent(query),
+      });
 
-    // Analyze found URLs
-    for (const urlStr of urls.slice(0, 10)) {
-      try {
-        const parsedUrl = new URL(urlStr);
-        const hostname = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
-
-        // Check if this domain is an OTA, directory, or social network
-        if (isDirectoryOrOta(hostname)) {
-          // This is a directory/OTA/social link. Does NOT count as official website.
-          continue;
-        }
-
-        // An independent non-directory domain was found in top search results.
-        // Check if this is the business's own website
-        const normalizedHost = normalizeName(hostname);
-        
-        // If domain name or path directly matches key words of the business name
-        // e.g. "hotel-lavina.com" matching "Hotel Lavina"
-        const businessWords = businessName
-          .toLowerCase()
-          .split(/[\s\-_]+/)
-          .filter((w) => w.length > 3);
-
-        const matchesBusinessWords = businessWords.some(
-          (w) => normalizedHost.includes(normalizeName(w))
-        );
-
-        if (matchesBusinessWords || normalizedHost.includes(normalizedBusiness)) {
-          // Official website discovered!
-          return {
-            isVerifiedNoWebsite: false,
-            reason: `Discovered official website: ${parsedUrl.origin}`,
-            officialWebsiteFound: parsedUrl.origin,
-            confidence: 'HIGH',
-          };
-        }
-
-        // If top result is an independent custom domain on top of search for the business name,
-        // it is very likely its official domain.
-        if (!isDirectoryOrOta(hostname)) {
-          return {
-            isVerifiedNoWebsite: false,
-            reason: `Discovered potential official domain: ${parsedUrl.origin}`,
-            officialWebsiteFound: parsedUrl.origin,
-            confidence: 'HIGH',
-          };
-        }
-      } catch {
-        // Invalid URL format, skip
-        continue;
+      if (liteRes.ok) {
+        const liteHtml = await liteRes.text();
+        const liteMatches = [...liteHtml.matchAll(/class=['"]result-link['"][^>]*href=['"]([^'"]+)['"]/g)];
+        const urls = [...new Set(liteMatches.map((m) => m[1]))];
+        return analyzeFoundUrls(urls, businessName);
       }
+    } catch {
+      // Ignore fallback error
     }
 
-    // If search executed cleanly and ONLY OTAs/directories/social networks were found,
-    // or no independent official websites exist:
-    return {
-      isVerifiedNoWebsite: true,
-      reason: 'Verified: No official website discovered via Google Places or web search. Only directory/OTA/social presence found.',
-      confidence: 'HIGH',
-    };
-  } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    // Strict requirement: "If verification is uncertain -> EXCLUDE."
     return {
       isVerifiedNoWebsite: false,
       reason: `Verification check could not be completed safely (${errorMsg}). Business excluded.`,
       confidence: 'UNCERTAIN',
     };
   }
+}
+
+/**
+ * Analyzes search result URLs against official website rules.
+ */
+function analyzeFoundUrls(urls: string[], businessName: string): VerificationResult {
+  const normalizedBusiness = normalizeName(businessName);
+  const businessWords = businessName
+    .toLowerCase()
+    .split(/[\s\-_]+/)
+    .filter((w) => w.length > 3);
+
+  for (const urlStr of urls.slice(0, 8)) {
+    try {
+      const parsedUrl = new URL(urlStr);
+      const hostname = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
+
+      // Check if this domain is an OTA, directory, portal, or social network
+      if (isDirectoryOrOta(hostname)) {
+        continue;
+      }
+
+      // Check if domain name or path directly matches key words of the business name
+      const normalizedHost = normalizeName(hostname);
+      const matchesBusinessWords = businessWords.some(
+        (w) => normalizedHost.includes(normalizeName(w))
+      );
+
+      if (matchesBusinessWords || normalizedHost.includes(normalizedBusiness)) {
+        return {
+          isVerifiedNoWebsite: false,
+          reason: `Discovered official website: ${parsedUrl.origin}`,
+          officialWebsiteFound: parsedUrl.origin,
+          confidence: 'HIGH',
+        };
+      }
+
+      // If top result is an independent custom domain on top of search for the business name
+      if (!isDirectoryOrOta(hostname)) {
+        return {
+          isVerifiedNoWebsite: false,
+          reason: `Discovered potential official domain: ${parsedUrl.origin}`,
+          officialWebsiteFound: parsedUrl.origin,
+          confidence: 'HIGH',
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // If search executed cleanly and ONLY OTAs/directories/social networks were found:
+  return {
+    isVerifiedNoWebsite: true,
+    reason: 'Verified: No official website discovered via Google Places or web search. Only directory/OTA/social presence found.',
+    confidence: 'HIGH',
+  };
 }
