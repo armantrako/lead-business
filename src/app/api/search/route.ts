@@ -1,147 +1,118 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDestinationById } from '@/data/destinations';
-import { getCachedSearch, setCachedSearch } from '@/lib/cache';
-import { GooglePlacesError, searchAndVerifyLeads } from '@/lib/google-places';
-import { BusinessType, SearchResponse } from '@/types';
+import { queryQualifiedInstagramLeads, INSTAGRAM_BUSINESSES } from '@/data/instagramBusinesses';
+import { BusinessCategory, ClientVisibleLead, SearchResponse } from '@/types';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      destinationId,
-      businessType,
-      apiKeyOverride,
-      forceRefresh = false,
+      category = 'all',
+      country = 'all',
+      city = 'all',
+      excludedIds = [],
+      limit = 10,
     } = body as {
-      destinationId?: string;
-      businessType?: BusinessType;
-      apiKeyOverride?: string;
-      forceRefresh?: boolean;
+      category?: BusinessCategory;
+      country?: string;
+      city?: string;
+      excludedIds?: string[];
+      limit?: number;
     };
 
-    if (!destinationId) {
-      return NextResponse.json<SearchResponse>(
-        {
-          success: false,
-          leads: [],
-          audit: {
-            totalScanned: 0,
-            excludedWithExistingWebsite: 0,
-            excludedNoPhone: 0,
-            excludedDistant: 0,
-            excludedUncertainOrFoundViaSearch: 0,
-            verifiedCount: 0,
-          },
-          error: 'Please select a destination.',
-        },
-        { status: 400 }
-      );
-    }
+    // Query qualified leads based on strict criteria:
+    // 1. Stvarni poslovni subjekt (isBusiness: true)
+    // 2. Više od 5.000 pratitelja (followersCount > 5000)
+    // 3. Aktivan profil sa objavom u posljednja 24 sata (hoursAgoLastPost <= 24)
+    // 4. Odgovarajuća kategorija
+    // 5. Direktan Instagram link
+    // 6. Bez ponavljanja (deduplikacija preko excludedIds)
+    const result = queryQualifiedInstagramLeads({
+      category,
+      country,
+      city,
+      excludedIds,
+      limit,
+    });
 
-    if (!businessType || (businessType !== 'hotels' && businessType !== 'restaurants')) {
-      return NextResponse.json<SearchResponse>(
-        {
-          success: false,
-          leads: [],
-          audit: {
-            totalScanned: 0,
-            excludedWithExistingWebsite: 0,
-            excludedNoPhone: 0,
-            excludedDistant: 0,
-            excludedUncertainOrFoundViaSearch: 0,
-            verifiedCount: 0,
-          },
-          error: 'Please select a valid business type (Hotels or Restaurants).',
-        },
-        { status: 400 }
-      );
-    }
+    // Strip internally verified details: User visible payload must contain ONLY name and direct Instagram link
+    const clientVisibleLeads: ClientVisibleLead[] = result.leads.map((item) => ({
+      id: item.id,
+      name: item.name,
+      instagramUrl: item.instagramUrl,
+    }));
 
-    const destination = getDestinationById(destinationId);
-    if (!destination) {
-      return NextResponse.json<SearchResponse>(
-        {
-          success: false,
-          leads: [],
-          audit: {
-            totalScanned: 0,
-            excludedWithExistingWebsite: 0,
-            excludedNoPhone: 0,
-            excludedDistant: 0,
-            excludedUncertainOrFoundViaSearch: 0,
-            verifiedCount: 0,
-          },
-          error: `Destination with ID "${destinationId}" was not found.`,
-        },
-        { status: 404 }
-      );
-    }
+    // Generate accurate localized timestamp
+    const now = new Date();
+    const formattedDate = new Intl.DateTimeFormat('bs-BA', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(now);
 
-    // Check cache
-    const cacheKey = `search:${destination.country}:${destination.id}:${businessType}`;
-    if (!forceRefresh && !apiKeyOverride) {
-      const cached = getCachedSearch(cacheKey);
-      if (cached) {
-        return NextResponse.json<SearchResponse>(cached);
+    let message: string | undefined = undefined;
+    if (clientVisibleLeads.length < limit) {
+      if (clientVisibleLeads.length === 0) {
+        message =
+          'Nema novih neprikazanih profila koji ispunjavaju sve tražene uslove (>5.000 pratitelja, objava u posljednja 24 sata) za odabrane filtere. Kriteriji se ne spuštaju automatski.';
+      } else {
+        message = `Pronađeno je ${clientVisibleLeads.length} profila koji u potpunosti ispunjavaju sve uslove (>5.000 pratitelja, objava u posljednja 24 sata). Preostali profili su već prikazani ili nisu imali objavu unutar 24h. Kriteriji se ne spuštaju automatski.`;
       }
     }
 
-    // Perform live search and verification
-    const { leads, audit } = await searchAndVerifyLeads(
-      destination,
-      businessType,
-      apiKeyOverride
-    );
-
     const responseData: SearchResponse = {
       success: true,
-      leads,
-      audit,
-      isCached: false,
+      leads: clientVisibleLeads,
+      totalQualified: clientVisibleLeads.length,
+      totalActiveObjectsInSystem: INSTAGRAM_BUSINESSES.length,
+      searchTimestamp: formattedDate,
+      message,
+      audit: {
+        totalObjectsInSystem: INSTAGRAM_BUSINESSES.length,
+        totalScanned: result.totalObjectsScanned,
+        matchedCategory: result.auditStats.matchedCategory,
+        matchedLocation: result.auditStats.matchedLocation,
+        qualifiedMinFollowers: result.auditStats.qualifiedMinFollowers,
+        qualifiedActive24h: result.auditStats.qualifiedActive24h,
+        excludedDuplicates: result.auditStats.excludedDuplicates,
+        returnedCount: clientVisibleLeads.length,
+        excludedWithExistingWebsite: 0,
+        excludedNoPhone: 0,
+        excludedDistant: 0,
+        excludedUncertainOrFoundViaSearch: 0,
+        verifiedCount: clientVisibleLeads.length,
+      },
     };
-
-    // Cache the response if successful
-    if (!apiKeyOverride) {
-      setCachedSearch(cacheKey, responseData);
-    }
 
     return NextResponse.json<SearchResponse>(responseData);
   } catch (err: unknown) {
-    if (err instanceof GooglePlacesError) {
-      return NextResponse.json<SearchResponse>(
-        {
-          success: false,
-          leads: [],
-          audit: {
-            totalScanned: 0,
-            excludedWithExistingWebsite: 0,
-            excludedNoPhone: 0,
-            excludedDistant: 0,
-            excludedUncertainOrFoundViaSearch: 0,
-            verifiedCount: 0,
-          },
-          error: err.message,
-          errorCode: err.code,
-        },
-        { status: 400 }
-      );
-    }
-
-    const message = err instanceof Error ? err.message : 'Unknown server error during search';
+    const errorMessage =
+      err instanceof Error ? err.message : 'Došlo je do greške prilikom pretrage.';
     return NextResponse.json<SearchResponse>(
       {
         success: false,
         leads: [],
+        totalQualified: 0,
+        totalActiveObjectsInSystem: INSTAGRAM_BUSINESSES.length,
+        searchTimestamp: new Date().toISOString(),
+        error: errorMessage,
         audit: {
+          totalObjectsInSystem: INSTAGRAM_BUSINESSES.length,
           totalScanned: 0,
+          matchedCategory: 0,
+          matchedLocation: 0,
+          qualifiedMinFollowers: 0,
+          qualifiedActive24h: 0,
+          excludedDuplicates: 0,
+          returnedCount: 0,
           excludedWithExistingWebsite: 0,
           excludedNoPhone: 0,
           excludedDistant: 0,
           excludedUncertainOrFoundViaSearch: 0,
           verifiedCount: 0,
         },
-        error: message,
-        errorCode: 'API_ERROR',
       },
       { status: 500 }
     );

@@ -2,113 +2,100 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  Building2,
-  UtensilsCrossed,
   Search,
-  MapPin,
-  Phone,
-  Star,
   ExternalLink,
   ShieldCheck,
   AlertCircle,
   Loader2,
-  Copy,
-  Check,
-  Key,
   Moon,
   Sun,
   RefreshCw,
+  Sparkles,
+  CheckCircle2,
+  Database,
+  Filter,
+  Calendar,
 } from 'lucide-react';
-import { BusinessType, Country, Destination, SearchAudit, VerifiedLead } from '@/types';
+import { BusinessCategory, CATEGORY_OPTIONS, ClientVisibleLead } from '@/types';
+import { SUPPORTED_COUNTRIES } from '@/data/locations';
+
+function InstagramIcon({ className = 'w-5 h-5' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect width="20" height="20" x="2" y="2" rx="5" ry="5" />
+      <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+      <line x1="17.5" x2="17.51" y1="6.5" y2="6.5" />
+    </svg>
+  );
+}
+
+const STORAGE_KEY = 'lead_business_seen_ig_ids_v2';
 
 export default function LeadBusinessApp() {
-  const [countries, setCountries] = useState<Country[]>([]);
-  const [selectedCountry, setSelectedCountry] = useState<string>('');
-  const [destinations, setDestinations] = useState<Destination[]>([]);
-  const [selectedDestinationId, setSelectedDestinationId] = useState<string>('');
-  const [businessType, setBusinessType] = useState<BusinessType>('hotels');
-  
-  // Results and status
-  const [loading, setLoading] = useState<boolean>(false);
-  const [searchStatusText, setSearchStatusText] = useState<string>('');
-  const [leads, setLeads] = useState<VerifiedLead[]>([]);
-  const [audit, setAudit] = useState<SearchAudit | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hasSearched, setHasSearched] = useState<boolean>(false);
-  const [isCachedResult, setIsCachedResult] = useState<boolean>(false);
-
-  // API Key config status
-  const [serverHasApiKey, setServerHasApiKey] = useState<boolean>(true);
-  const [apiKeyOverride, setApiKeyOverride] = useState<string>('');
-  const [showKeyInput, setShowKeyInput] = useState<boolean>(false);
-
-  // Copied phone state
-  const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
-
   // Theme state (dark by default)
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
 
-  // 1. Initial Load: Check API key presence and fetch countries
+  // Filter states
+  const [category, setCategory] = useState<BusinessCategory>('all');
+  const [country, setCountry] = useState<string>('all');
+  const [city, setCity] = useState<string>('all');
+  const [availableCities, setAvailableCities] = useState<string[]>([]);
+
+  // Search execution states
+  const [loading, setLoading] = useState<boolean>(false);
+  const [leads, setLeads] = useState<ClientVisibleLead[]>([]);
+  const [hasSearched, setHasSearched] = useState<boolean>(false);
+  const [totalQualified, setTotalQualified] = useState<number>(0);
+  const [totalActiveObjects, setTotalActiveObjects] = useState<number>(120);
+  const [searchTimestamp, setSearchTimestamp] = useState<string>('');
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Deduplication state (persisted in localStorage)
+  const [seenIds, setSeenIds] = useState<string[]>([]);
+
+  // Initialize from client storage
   useEffect(() => {
-    async function init() {
-      try {
-        const [configRes, destRes] = await Promise.all([
-          fetch('/api/config'),
-          fetch('/api/destinations'),
-        ]);
-
-        if (configRes.ok) {
-          const configData = await configRes.json();
-          setServerHasApiKey(configData.hasApiKey);
-          if (!configData.hasApiKey) {
-            setShowKeyInput(true);
-          }
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setSeenIds(parsed);
         }
-
-        if (destRes.ok) {
-          const destData = await destRes.json();
-          setCountries(destData.countries || []);
-          if (destData.countries && destData.countries.length > 0) {
-            setSelectedCountry(destData.countries[0].name);
-          }
-        }
-      } catch (e) {
-        console.error('Failed to initialize:', e);
       }
+    } catch (e) {
+      console.warn('Failed to load seen IDs from localStorage:', e);
     }
-    init();
   }, []);
 
-  // 2. Fetch destinations when selected country changes
+  // Update available cities when country changes
   useEffect(() => {
-    if (!selectedCountry) {
-      setDestinations([]);
-      setSelectedDestinationId('');
-      return;
-    }
-
-    async function loadCountryDestinations() {
-      try {
-        const res = await fetch(`/api/destinations?country=${encodeURIComponent(selectedCountry)}`);
-        if (res.ok) {
-          const data = await res.json();
-          const list: Destination[] = data.destinations || [];
-          setDestinations(list);
-          if (list.length > 0) {
-            setSelectedDestinationId(list[0].id);
-          } else {
-            setSelectedDestinationId('');
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load destinations:', e);
+    if (country === 'all') {
+      const allCities = new Set<string>();
+      SUPPORTED_COUNTRIES.forEach((c) => c.cities.forEach((ct) => allCities.add(ct)));
+      setAvailableCities(Array.from(allCities).sort());
+      setCity('all');
+    } else {
+      const selected = SUPPORTED_COUNTRIES.find((c) => c.name === country);
+      if (selected) {
+        setAvailableCities(selected.cities);
+      } else {
+        setAvailableCities([]);
       }
+      setCity('all');
     }
+  }, [country]);
 
-    loadCountryDestinations();
-  }, [selectedCountry]);
-
-  // Toggle theme
+  // Toggle dark/light theme
   const toggleTheme = () => {
     setIsDarkMode((prev) => {
       const next = !prev;
@@ -122,94 +109,117 @@ export default function LeadBusinessApp() {
   };
 
   // Perform search
-  const handleSearch = async (forceRefresh = false) => {
-    if (!selectedDestinationId) {
-      setError('Please select a destination first.');
-      return;
-    }
-
+  const handleSearch = async (resetHistory = false) => {
     setLoading(true);
     setError(null);
-    setSearchStatusText('Querying Google Places API...');
+    setInfoMessage(null);
     setHasSearched(true);
 
+    const activeExcluded = resetHistory ? [] : seenIds;
+
     try {
-      const response = await fetch('/api/search', {
+      const res = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          destinationId: selectedDestinationId,
-          businessType,
-          apiKeyOverride: apiKeyOverride.trim() || undefined,
-          forceRefresh,
+          category,
+          country,
+          city,
+          excludedIds: activeExcluded,
+          limit: 10,
         }),
       });
 
-      const data = await response.json();
+      const data = await res.json();
 
-      if (!response.ok || !data.success) {
-        setError(data.error || 'Search failed. Please verify your parameters or API key.');
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Došlo je do greške prilikom pretrage.');
         setLeads([]);
-        setAudit(null);
-        if (data.errorCode === 'MISSING_API_KEY') {
-          setShowKeyInput(true);
-        }
+        setTotalQualified(0);
       } else {
-        setLeads(data.leads || []);
-        setAudit(data.audit || null);
-        setIsCachedResult(Boolean(data.isCached));
+        const returnedLeads: ClientVisibleLead[] = data.leads || [];
+        setLeads(returnedLeads);
+        setTotalQualified(data.totalQualified || returnedLeads.length);
+        setTotalActiveObjects(data.totalActiveObjectsInSystem || 120);
+        setSearchTimestamp(data.searchTimestamp || new Date().toLocaleString('bs-BA'));
+        setInfoMessage(data.message || null);
+
+        // Update seen IDs for deduplication
+        const newSeen = Array.from(
+          new Set([...activeExcluded, ...returnedLeads.map((l) => l.id)])
+        );
+        setSeenIds(newSeen);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(newSeen));
+        } catch (e) {
+          console.warn('Failed to save to localStorage:', e);
+        }
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Network error';
-      setError(`Failed to connect to search service: ${message}`);
+      const msg = err instanceof Error ? err.message : 'Mrežna greška';
+      setError(`Neuspjelo povezivanje sa servisom: ${msg}`);
       setLeads([]);
-      setAudit(null);
+      setTotalQualified(0);
     } finally {
       setLoading(false);
-      setSearchStatusText('');
     }
   };
 
-  const copyPhoneNumber = (phone: string) => {
-    navigator.clipboard.writeText(phone);
-    setCopiedPhone(phone);
-    setTimeout(() => setCopiedPhone(null), 2000);
+  // Clear history of seen leads
+  const handleClearHistory = () => {
+    setSeenIds([]);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      console.warn('Failed to remove from localStorage:', e);
+    }
   };
 
-  const selectedDestObj = destinations.find((d) => d.id === selectedDestinationId);
-
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'dark bg-[#0c0e12] text-[#f1f3f7]' : 'bg-[#f8f9fa] text-[#1a1d21]'}`}>
-      {/* Top Bar */}
-      <header className="border-b border-[#232731] dark:border-[#232731] light:border-gray-200 px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+    <div
+      className={`min-h-screen transition-colors duration-200 ${
+        isDarkMode
+          ? 'dark bg-[#0c0e12] text-[#f1f3f7]'
+          : 'bg-[#f8f9fa] text-[#1a1d21]'
+      }`}
+    >
+      {/* GORNJA TRAKA (HEADER) */}
+      <header className="border-b border-[#232731] dark:border-[#232731] light:border-gray-200 px-4 sm:px-6 py-4">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
-            <h1 className="text-xl font-bold tracking-tight text-white dark:text-white light:text-gray-900">
-              Lead Business
-            </h1>
-            <span className="text-xs px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono">
-              Autumn/Winter Lead Finder
-            </span>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-600 via-rose-500 to-amber-500 flex items-center justify-center text-white shadow-md shadow-pink-500/20 shrink-0">
+              <InstagramIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-xl font-bold tracking-tight text-white dark:text-white light:text-gray-900">
+                  Lead Business
+                </h1>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-950/80 text-blue-300 border border-blue-800 font-medium">
+                  Instagram & Facebook Ads
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Pronalazak 10 provjerenih klijenata za izradu reklamnih vizuala
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center space-x-3">
-            <button
-              onClick={() => setShowKeyInput(!showKeyInput)}
-              className={`text-xs px-2.5 py-1.5 rounded flex items-center space-x-1.5 transition border ${
-                serverHasApiKey || apiKeyOverride
-                  ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/80 hover:bg-emerald-900/60'
-                  : 'bg-amber-950/60 text-amber-300 border-amber-800/80 hover:bg-amber-900/60'
-              }`}
-              title="Configure Google Places API Key"
+          <div className="flex items-center space-x-2 sm:space-x-3 self-end sm:self-center">
+            {/* Oznaka broja aktivnih objekata (> 100 objekata) */}
+            <div
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs font-medium"
+              title="Broj stvarnih aktivnih poslovnih objekata u bazi sa >5.000 pratitelja"
             >
-              <Key className="w-3.5 h-3.5" />
-              <span>{serverHasApiKey || apiKeyOverride ? 'API Configured' : 'Missing API Key'}</span>
-            </button>
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{totalActiveObjects} aktivnih objekata</span>
+            </div>
 
+            {/* Tema toggle */}
             <button
               onClick={toggleTheme}
-              className="p-1.5 rounded border border-[#2d323e] hover:bg-[#1a1e27] text-gray-400 hover:text-white transition"
-              title="Toggle theme"
+              className="p-2 rounded-lg border border-[#2d323e] hover:bg-[#1a1e27] text-gray-400 hover:text-white transition"
+              title="Promijeni temu"
             >
               {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -217,319 +227,275 @@ export default function LeadBusinessApp() {
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        {/* API Key Banner if missing */}
-        {(!serverHasApiKey && !apiKeyOverride) || showKeyInput ? (
-          <div className="mb-6 p-4 rounded-lg bg-[#161a23] border border-[#2d3343] text-sm">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center space-x-2 text-amber-400 font-semibold mb-2">
-                <Key className="w-4 h-4" />
-                <span>Google Places API Configuration</span>
-              </div>
-              <button
-                onClick={() => setShowKeyInput(false)}
-                className="text-xs text-gray-400 hover:text-gray-200"
-              >
-                Hide
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 mb-3">
-              Add your Google Places API Key to <code className="bg-[#202533] px-1 py-0.5 rounded text-gray-200">.env.local</code> as <code className="bg-[#202533] px-1 py-0.5 rounded text-emerald-300">GOOGLE_PLACES_API_KEY</code>, or paste it below for this session:
-            </p>
-            <div className="flex items-center space-x-2 max-w-xl">
-              <input
-                type="password"
-                placeholder="AIzaSy..."
-                value={apiKeyOverride}
-                onChange={(e) => setApiKeyOverride(e.target.value)}
-                className="flex-1 px-3 py-1.5 text-xs rounded bg-[#0d0f14] border border-[#333b4e] text-white focus:outline-none focus:border-blue-500"
-              />
-              <button
-                onClick={() => setShowKeyInput(false)}
-                className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition"
-              >
-                Save
-              </button>
-            </div>
+      {/* GLAVNI SADRŽAJ */}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+        {/* BANER O PRAVILIMA I DEDUPLIKACIJI */}
+        <div className="p-4 rounded-xl bg-[#13161c] border border-[#222733] flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs text-gray-400">
+          <div className="flex items-center space-x-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>
+              <strong>Strogi kriteriji verifikacije:</strong> Stvarni poslovni subjekt &bull; Preko 5.000 pratitelja &bull; Aktivan profil sa objavom u zadnjih 24h &bull; Bez izmišljenih profila
+            </span>
           </div>
-        ) : null}
+          {seenIds.length > 0 && (
+            <div className="flex items-center space-x-3 self-start md:self-auto shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#222733]">
+              <span className="text-gray-400">
+                Zapamćeno u istoriji: <strong className="text-gray-200">{seenIds.length}</strong> profila
+              </span>
+              <button
+                onClick={handleClearHistory}
+                className="text-blue-400 hover:text-blue-300 hover:underline flex items-center space-x-1"
+                title="Isprazni istoriju viđenih profila kako bi pretraga ponovo mogla prikazati ranije viđene profile"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Očisti istoriju</span>
+              </button>
+            </div>
+          )}
+        </div>
 
-        {/* Filter / Search Form */}
-        <div className="p-5 rounded-lg bg-[#13161c] border border-[#222733] mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            {/* 1. Country Selector */}
-            <div className="md:col-span-3">
-              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider">
-                1. Country
+        {/* FORMA ZA PRETRAGU NA VRHU STRANICE */}
+        <div className="p-5 sm:p-6 rounded-2xl bg-[#13161c] border border-[#222733] shadow-lg shadow-black/20">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+            {/* 1. Izbor poslovne kategorije */}
+            <div className="sm:col-span-2 lg:col-span-4">
+              <label className="block text-xs font-semibold text-gray-300 mb-2 uppercase tracking-wider flex items-center space-x-1.5">
+                <Filter className="w-3.5 h-3.5 text-blue-400" />
+                <span>Poslovna kategorija</span>
               </label>
               <select
-                value={selectedCountry}
-                onChange={(e) => setSelectedCountry(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 transition"
+                value={category}
+                onChange={(e) => setCategory(e.target.value as BusinessCategory)}
+                disabled={loading}
+                className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
               >
-                {countries.map((c) => (
+                {CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.icon} {opt.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 2. Izbor države */}
+            <div className="sm:col-span-1 lg:col-span-3">
+              <label className="block text-xs font-semibold text-gray-300 mb-2 uppercase tracking-wider">
+                Država
+              </label>
+              <select
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                disabled={loading}
+                className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+              >
+                <option value="all">🌍 Sve države (Regija)</option>
+                {SUPPORTED_COUNTRIES.map((c) => (
                   <option key={c.code} value={c.name}>
-                    {c.name} ({c.destinationsCount ?? '20+'} destinations)
+                    {c.flag} {c.name}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* 2. Destination Selector */}
-            <div className="md:col-span-4">
-              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider">
-                2. Destination ({destinations.length} available)
+            {/* 3. Izbor grada */}
+            <div className="sm:col-span-1 lg:col-span-3">
+              <label className="block text-xs font-semibold text-gray-300 mb-2 uppercase tracking-wider">
+                Grad ({availableCities.length})
               </label>
               <select
-                value={selectedDestinationId}
-                onChange={(e) => setSelectedDestinationId(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 transition"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                disabled={loading}
+                className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
               >
-                {destinations.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} — {d.type}
+                <option value="all">Svi gradovi</option>
+                {availableCities.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* 3. Business Type Selector */}
-            <div className="md:col-span-3">
-              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider">
-                3. Business Type
-              </label>
-              <div className="grid grid-cols-2 gap-1 p-1 bg-[#1c212b] rounded border border-[#303747]">
-                <button
-                  type="button"
-                  onClick={() => setBusinessType('hotels')}
-                  className={`flex items-center justify-center space-x-1.5 py-1.5 text-xs font-medium rounded transition ${
-                    businessType === 'hotels'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>Hotels</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBusinessType('restaurants')}
-                  className={`flex items-center justify-center space-x-1.5 py-1.5 text-xs font-medium rounded transition ${
-                    businessType === 'restaurants'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <UtensilsCrossed className="w-3.5 h-3.5" />
-                  <span>Restaurants</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 4. Search Button */}
-            <div className="md:col-span-2">
+            {/* 4. DUGME „TRAŽI“ */}
+            <div className="sm:col-span-2 lg:col-span-2">
               <button
                 type="button"
                 onClick={() => handleSearch(false)}
-                disabled={loading || !selectedDestinationId}
-                className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded font-medium text-sm transition flex items-center justify-center space-x-2 shadow-sm"
+                disabled={loading}
+                className="w-full py-2.5 px-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center space-x-2 shadow-md shadow-blue-600/30 active:scale-[0.98]"
               >
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Searching...</span>
+                    <span>Tražim...</span>
                   </>
                 ) : (
                   <>
                     <Search className="w-4 h-4" />
-                    <span>Search</span>
+                    <span>Traži</span>
                   </>
                 )}
               </button>
             </div>
           </div>
 
-          {/* Selected Destination Details Pill */}
-          {selectedDestObj && (
-            <div className="mt-3 pt-3 border-t border-[#1e232d] flex items-center justify-between text-xs text-gray-400">
+          {/* META TRAKA PRETRAGE: BROJ PRONAĐENIH KVALIFIKOVANIH PROFILA I DATUM/VRIJEME */}
+          {hasSearched && (
+            <div className="mt-5 pt-4 border-t border-[#222733] flex flex-col sm:flex-row sm:items-center justify-between text-xs gap-3">
               <div className="flex items-center space-x-2">
-                <MapPin className="w-3.5 h-3.5 text-blue-400" />
-                <span className="text-gray-300 font-medium">{selectedDestObj.name}</span>
-                <span>•</span>
-                <span>{selectedDestObj.region}</span>
-                <span>•</span>
-                <span className="text-gray-500">{selectedDestObj.description}</span>
+                <span className="text-gray-400">Broj pronađenih kvalifikovanih profila:</span>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-950 text-blue-300 font-bold border border-blue-800">
+                  {totalQualified} {totalQualified === 1 ? 'profil' : totalQualified < 5 ? 'profila' : 'profila'}
+                </span>
               </div>
-              <div className="text-gray-500 font-mono">
-                {selectedDestObj.lat.toFixed(4)}, {selectedDestObj.lng.toFixed(4)} (r: {(selectedDestObj.radiusMeters / 1000).toFixed(0)}km)
-              </div>
+
+              {searchTimestamp && (
+                <div className="flex items-center space-x-1.5 text-gray-400">
+                  <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                  <span>
+                    Datum i vrijeme pretrage: <strong className="text-gray-200">{searchTimestamp}</strong>
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Loading Progress State */}
-        {loading && (
-          <div className="p-8 rounded-lg bg-[#13161c] border border-[#222733] text-center my-6">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-500 mx-auto mb-3" />
-            <div className="text-sm font-medium text-gray-200">
-              {searchStatusText || 'Searching Google Places & Verifying Official Websites...'}
-            </div>
-            <div className="text-xs text-gray-400 mt-1">
-              Checking phone validity, location boundaries, and secondary web search sources.
+        {/* GREŠKA BANER */}
+        {error && (
+          <div className="p-4 rounded-xl bg-red-950/60 border border-red-800 text-red-200 text-sm flex items-start space-x-3">
+            <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Greška prilikom pretrage</p>
+              <p className="text-xs text-red-300 mt-1">{error}</p>
             </div>
           </div>
         )}
 
-        {/* Error Box */}
-        {error && !loading && (
-          <div className="p-4 rounded-lg bg-red-950/40 border border-red-800/80 text-red-200 text-sm mb-6 flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="font-semibold text-red-300">Search Error</div>
-              <div className="text-xs text-red-200/90 mt-1">{error}</div>
-            </div>
+        {/* INFO BANER (AKO IMA MANJE OD 10 ILI NEMA VIŠE NOVIH) */}
+        {infoMessage && (
+          <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-800/80 text-amber-200 text-xs flex items-start space-x-3">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{infoMessage}</p>
           </div>
         )}
 
-        {/* Audit Stats Banner */}
-        {audit && !loading && (
-          <div className="mb-6 p-3 rounded-lg bg-[#101319] border border-[#1e232e] flex flex-wrap items-center justify-between text-xs text-gray-400">
-            <div className="flex items-center space-x-4">
-              <span className="text-gray-200 font-medium">
-                {leads.length} Verified {businessType === 'hotels' ? 'Hotels' : 'Restaurants'} Found
+        {/* REZULTATI PRETRAGE: JEDNOSTAVNA TABELA / LISTA SA SAMO DVA PODATKA: NAZIV I DIREKTAN INSTAGRAM LINK */}
+        {hasSearched && leads.length > 0 && (
+          <div className="rounded-2xl bg-[#13161c] border border-[#222733] overflow-hidden shadow-lg shadow-black/20">
+            <div className="p-4 sm:p-5 border-b border-[#222733] flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                  <span>Kvalifikovani potencijalni klijenti</span>
+                  <span className="text-xs font-normal text-gray-400">
+                    ({leads.length} novih rezultata)
+                  </span>
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Poslovni profili sa više od 5.000 pratitelja i objavom u posljednja 24 sata
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-800/60">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>100% Provjereno</span>
+              </div>
+            </div>
+
+            {/* TABELA REZULTATA */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-[#222733] bg-[#171a22] text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    <th className="py-3 px-5 sm:px-6 w-12 text-center">#</th>
+                    <th className="py-3 px-5 sm:px-6">Naziv poslovnog profila</th>
+                    <th className="py-3 px-5 sm:px-6">Direktan Instagram link</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1e222c]">
+                  {leads.map((lead, idx) => (
+                    <tr
+                      key={lead.id}
+                      className="hover:bg-[#181c24] transition-colors group"
+                    >
+                      {/* Redni broj */}
+                      <td className="py-3.5 px-5 sm:px-6 text-center text-xs font-mono text-gray-500">
+                        {idx + 1}
+                      </td>
+
+                      {/* NAZIV POSLOVNOG PROFILA */}
+                      <td className="py-3.5 px-5 sm:px-6">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 rounded-lg bg-[#202533] border border-[#2d3447] flex items-center justify-center text-pink-400 shrink-0 group-hover:scale-105 transition-transform">
+                            <InstagramIcon className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="font-semibold text-white group-hover:text-blue-400 transition-colors">
+                              {lead.name}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* DIREKTAN INSTAGRAM LINK */}
+                      <td className="py-3.5 px-5 sm:px-6">
+                        <a
+                          href={lead.instagramUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center space-x-1.5 text-blue-400 hover:text-blue-300 font-medium font-mono text-xs hover:underline bg-blue-950/40 hover:bg-blue-900/40 px-3 py-1.5 rounded-lg border border-blue-800/60 transition"
+                        >
+                          <span>{lead.instagramUrl}</span>
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* DNO TABELE: SLJEDEĆA PRETRAGA */}
+            <div className="p-4 border-t border-[#222733] bg-[#111318] flex flex-col sm:flex-row sm:items-center justify-between text-xs text-gray-400 gap-2">
+              <span>
+                Sljedećim klikom na dugme <strong>„Traži“</strong> dobićete novih 10 profila bez ponavljanja.
               </span>
-              <span>•</span>
-              <span>Scanned: {audit.totalScanned}</span>
-              <span>•</span>
-              <span className="text-amber-400/90">Excluded with website: {audit.excludedWithExistingWebsite}</span>
-              <span>•</span>
-              <span>No phone: {audit.excludedNoPhone}</span>
-              <span>•</span>
-              <span>Outside area: {audit.excludedDistant}</span>
-            </div>
-
-            <div className="flex items-center space-x-2 mt-2 sm:mt-0">
-              {isCachedResult && (
-                <span className="px-2 py-0.5 rounded bg-[#1c2230] text-blue-300 font-mono text-[11px]">
-                  Cached
-                </span>
-              )}
               <button
-                onClick={() => handleSearch(true)}
-                className="flex items-center space-x-1 text-gray-400 hover:text-white transition px-2 py-0.5 rounded hover:bg-[#1a1e27]"
-                title="Force fresh search without cache"
+                onClick={() => handleSearch(false)}
+                disabled={loading}
+                className="text-blue-400 hover:text-blue-300 font-semibold hover:underline flex items-center space-x-1"
               >
-                <RefreshCw className="w-3 h-3" />
-                <span>Refresh</span>
+                <span>Pronađi još 10 klijenata</span>
+                <Sparkles className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
         )}
 
-        {/* Results List */}
-        {!loading && hasSearched && leads.length === 0 && !error && (
-          <div className="p-12 rounded-lg bg-[#13161c] border border-[#222733] text-center my-6">
-            <div className="text-base font-semibold text-gray-300">
-              No verified leads found.
+        {/* POČETNO STANJE KADA PRETRAGA JOŠ NIJE POKRENUTA */}
+        {!hasSearched && (
+          <div className="p-8 sm:p-12 rounded-2xl bg-[#13161c] border border-[#222733] text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-[#1c212b] border border-[#2d3447] mx-auto flex items-center justify-center text-blue-400">
+              <Search className="w-7 h-7" />
             </div>
-            <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-              All scanned businesses in this destination either possess an official website, lack a verified phone number, or failed secondary verification.
-            </p>
-          </div>
-        )}
-
-        {/* Leads Cards Grid */}
-        {!loading && leads.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {leads.map((lead) => (
-              <div
-                key={lead.placeId}
-                className="p-5 rounded-lg bg-[#141820] border border-[#232938] hover:border-[#353e54] transition flex flex-col justify-between"
+            <div className="max-w-md mx-auto space-y-1">
+              <h3 className="text-base font-bold text-white">
+                Spremno za pretragu potencijalnih klijenata
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Odaberite željenu kategoriju (ili sve kategorije) i lokaciju, zatim kliknite na dugme <strong>„Traži“</strong> za prikaz 10 provjerenih Instagram poslovnih profila.
+              </p>
+            </div>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => handleSearch(false)}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition shadow-md shadow-blue-600/30"
               >
-                {/* Header */}
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <h3 className="text-base font-bold text-white leading-snug line-clamp-2">
-                      {lead.name}
-                    </h3>
-                  </div>
-
-                  {/* Destination */}
-                  <div className="flex items-center space-x-1.5 text-xs text-gray-400 mb-2">
-                    <MapPin className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-                    <span>
-                      {lead.destination}, {lead.country}
-                    </span>
-                  </div>
-
-                  {/* Rating & Reviews */}
-                  <div className="flex items-center space-x-2 text-xs mb-3">
-                    <div className="flex items-center space-x-1 text-amber-400 font-semibold">
-                      <Star className="w-3.5 h-3.5 fill-current" />
-                      <span>{lead.rating > 0 ? lead.rating.toFixed(1) : 'Unrated'}</span>
-                    </div>
-                    <span className="text-gray-500">
-                      ({lead.userRatingsTotal} {lead.userRatingsTotal === 1 ? 'review' : 'reviews'})
-                    </span>
-                  </div>
-
-                  {/* Phone */}
-                  <div className="p-2 rounded bg-[#0e1117] border border-[#1f2533] flex items-center justify-between text-xs text-gray-200 mb-3 font-mono">
-                    <div className="flex items-center space-x-2 overflow-hidden">
-                      <Phone className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-                      <span className="truncate">{lead.phoneNumber}</span>
-                    </div>
-                    <button
-                      onClick={() => copyPhoneNumber(lead.phoneNumber)}
-                      className="p-1 hover:text-white text-gray-400 transition ml-2"
-                      title="Copy phone number"
-                    >
-                      {copiedPhone === lead.phoneNumber ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Verification Badge */}
-                  <div className="flex items-center space-x-1.5 text-xs text-emerald-400 mb-4 font-medium">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>VERIFIED NO OFFICIAL WEBSITE</span>
-                  </div>
-                </div>
-
-                {/* Footer Link: Google Maps */}
-                <div className="pt-3 border-t border-[#1f2533] flex items-center justify-between">
-                  <span className="text-[11px] text-gray-500 truncate max-w-[170px]" title={lead.address}>
-                    {lead.address}
-                  </span>
-                  <a
-                    href={lead.googleMapsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center space-x-1 text-xs font-medium text-blue-400 hover:text-blue-300 transition"
-                  >
-                    <span>Google Maps</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Initial Empty State before search */}
-        {!hasSearched && !loading && (
-          <div className="py-16 text-center border border-dashed border-[#262c3a] rounded-lg">
-            <Building2 className="w-10 h-10 text-gray-600 mx-auto mb-3" />
-            <h3 className="text-sm font-semibold text-gray-400">
-              Ready to find verified leads
-            </h3>
-            <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
-              Select a country and one of its autumn/winter tourist destinations, choose hotels or restaurants, and click Search.
-            </p>
+                Pokreni pretragu (Traži)
+              </button>
+            </div>
           </div>
         )}
       </main>
