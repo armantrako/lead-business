@@ -45,7 +45,7 @@ export default function LeadBusinessApp() {
 
   // Filter states
   const [category, setCategory] = useState<BusinessCategory>('all');
-  const [country, setCountry] = useState<string>('all');
+  const [country, setCountry] = useState<string>('Bosna i Hercegovina');
   const [city, setCity] = useState<string>('all');
   const [availableCities, setAvailableCities] = useState<string[]>([]);
 
@@ -54,7 +54,7 @@ export default function LeadBusinessApp() {
   const [leads, setLeads] = useState<ClientVisibleLead[]>([]);
   const [hasSearched, setHasSearched] = useState<boolean>(false);
   const [totalQualified, setTotalQualified] = useState<number>(0);
-  const [totalActiveObjects, setTotalActiveObjects] = useState<number>(120);
+  const [totalActiveObjects, setTotalActiveObjects] = useState<number>(110);
   const [searchTimestamp, setSearchTimestamp] = useState<string>('');
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,19 +79,9 @@ export default function LeadBusinessApp() {
 
   // Update available cities when country changes
   useEffect(() => {
-    if (country === 'all') {
-      const allCities = new Set<string>();
-      SUPPORTED_COUNTRIES.forEach((c) => c.cities.forEach((ct) => allCities.add(ct)));
-      setAvailableCities(Array.from(allCities).sort());
-      setCity('all');
-    } else {
-      const selected = SUPPORTED_COUNTRIES.find((c) => c.name === country);
-      if (selected) {
-        setAvailableCities(selected.cities);
-      } else {
-        setAvailableCities([]);
-      }
-      setCity('all');
+    const selected = SUPPORTED_COUNTRIES.find((c) => c.name === country) || SUPPORTED_COUNTRIES[0];
+    if (selected) {
+      setAvailableCities(selected.cities);
     }
   }, [country]);
 
@@ -209,10 +199,10 @@ export default function LeadBusinessApp() {
             {/* Oznaka broja aktivnih objekata (> 100 objekata) */}
             <div
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs font-medium"
-              title="Broj stvarnih aktivnih poslovnih objekata u bazi sa >5.000 pratitelja"
+              title="Broj stvarnih aktivnih poslovnih objekata u bazi sa >5.000 pratitelja u Bosni i Hercegovini"
             >
               <Database className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{totalActiveObjects} aktivnih objekata</span>
+              <span>{totalActiveObjects} aktivnih objekata (BiH)</span>
             </div>
 
             {/* Tema toggle */}
@@ -288,7 +278,6 @@ export default function LeadBusinessApp() {
                 disabled={loading}
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-[#1c212b] border border-[#303747] text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
               >
-                <option value="all">🌍 Sve države (Regija)</option>
                 {SUPPORTED_COUNTRIES.map((c) => (
                   <option key={c.code} value={c.name}>
                     {c.flag} {c.name}

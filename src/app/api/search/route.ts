@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryQualifiedInstagramLeads, INSTAGRAM_BUSINESSES } from '@/data/instagramBusinesses';
 import { BusinessCategory, ClientVisibleLead, SearchResponse } from '@/types';
+import { sanitizeAndValidateInstagramUrl } from '@/lib/instagram-url';
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,11 +36,22 @@ export async function POST(request: NextRequest) {
     });
 
     // Strip internally verified details: User visible payload must contain ONLY name and direct Instagram link
-    const clientVisibleLeads: ClientVisibleLead[] = result.leads.map((item) => ({
-      id: item.id,
-      name: item.name,
-      instagramUrl: item.instagramUrl,
-    }));
+    // Validated and formatted via canonical Instagram URL sanitizer
+    const clientVisibleLeads: ClientVisibleLead[] = [];
+    for (const item of result.leads) {
+      const sanitized = sanitizeAndValidateInstagramUrl(item.instagramUrl);
+      if (sanitized.isValid) {
+        clientVisibleLeads.push({
+          id: item.id,
+          name: item.name,
+          instagramUrl: sanitized.canonicalUrl,
+        });
+      } else {
+        console.error(
+          `[Search Route] Excluded lead "${item.name}" due to invalid Instagram URL: ${sanitized.error}`
+        );
+      }
+    }
 
     // Generate accurate localized timestamp
     const now = new Date();

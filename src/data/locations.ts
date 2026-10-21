@@ -23,58 +23,11 @@ export const SUPPORTED_COUNTRIES: CountryInfo[] = [
       'Travnik',
     ],
   },
-  {
-    code: 'HR',
-    name: 'Hrvatska',
-    flag: '🇭🇷',
-    cities: [
-      'Zagreb',
-      'Split',
-      'Rijeka',
-      'Osijek',
-      'Zadar',
-      'Dubrovnik',
-      'Pula',
-      'Šibenik',
-    ],
-  },
-  {
-    code: 'RS',
-    name: 'Srbija',
-    flag: '🇷🇸',
-    cities: [
-      'Beograd',
-      'Novi Sad',
-      'Niš',
-      'Kragujevac',
-      'Subotica',
-      'Zrenjanin',
-      'Pančevo',
-    ],
-  },
-  {
-    code: 'ME',
-    name: 'Crna Gora',
-    flag: '🇲🇪',
-    cities: [
-      'Podgorica',
-      'Budva',
-      'Bar',
-      'Nikšić',
-      'Kotor',
-      'Herceg Novi',
-    ],
-  },
 ];
 
-export function getCitiesByCountry(countryName: string): string[] {
-  if (!countryName || countryName === 'all') {
-    const allCities = new Set<string>();
-    SUPPORTED_COUNTRIES.forEach((c) => c.cities.forEach((city) => allCities.add(city)));
-    return Array.from(allCities).sort();
-  }
+export function getCitiesByCountry(countryName: string = 'Bosna i Hercegovina'): string[] {
   const country = SUPPORTED_COUNTRIES.find(
     (c) => c.name.toLowerCase() === countryName.toLowerCase() || c.code.toLowerCase() === countryName.toLowerCase()
   );
-  return country ? country.cities : [];
+  return country ? country.cities : SUPPORTED_COUNTRIES[0].cities;
 }
