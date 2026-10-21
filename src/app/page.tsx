@@ -54,7 +54,7 @@ export default function LeadBusinessApp() {
   const [leads, setLeads] = useState<ClientVisibleLead[]>([]);
   const [hasSearched, setHasSearched] = useState<boolean>(false);
   const [totalQualified, setTotalQualified] = useState<number>(0);
-  const [totalActiveObjects, setTotalActiveObjects] = useState<number>(110);
+  const [totalActiveObjects, setTotalActiveObjects] = useState<number>(134);
   const [searchTimestamp, setSearchTimestamp] = useState<string>('');
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
