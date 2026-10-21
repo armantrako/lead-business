@@ -1123,7 +1123,9 @@ export function queryQualifiedInstagramLeads(params: {
     const matchesCountry =
       country === 'all' ||
       item.country.toLowerCase() === country.toLowerCase() ||
-      country.toLowerCase().includes('bosna');
+      country.toLowerCase().includes('bosna') ||
+      country.toLowerCase() === 'ba' ||
+      country.toLowerCase() === 'bih';
     const matchesCity =
       city === 'all' ||
       item.city.toLowerCase() === city.toLowerCase();
